@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -12,6 +13,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.SystemClock
 import android.text.InputType
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -44,6 +46,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.WebViewCompat
 import kotlin.math.hypot
 
 class MainActivity : AppCompatActivity() {
@@ -82,6 +85,21 @@ class MainActivity : AppCompatActivity() {
     private var resumed = false
     private var currentUrl: String? = null
 
+    // 诊断模式与按延迟追帧：诊断只在本次运行有效，追帧阈值和分辨率上限来自设置
+    private lateinit var diagOverlay: TextView
+    private var diagOn = false
+    private var stats: DiagStats? = null
+    private var statsKey = ""
+    private var pageScripts: PageScripts.Installed? = null
+    private var pageScriptsConfig = ""
+    private var reloadReason: String? = null
+    private var lastCatchUpAt = 0L
+    private var noTimestampWarned = false
+    private var unsupportedWarned = false
+    private val diagListener = WebViewCompat.WebMessageListener { view, message, _, _, _ ->
+        if (view === webView) onDiagMessage(message.data)
+    }
+
     private var fullscreen = false
     private var firstResume = true
     private var lastBlockedToastAt = 0L
@@ -106,7 +124,9 @@ class MainActivity : AppCompatActivity() {
         tileContainer = findViewById(R.id.tileContainer)
         homeInput = findViewById(R.id.homeInput)
 
+        setupDiagOverlay()
         setupWebView()
+        applyPageScripts(reload = false)
         setupButtons()
         setupBackHandling()
 
@@ -130,6 +150,8 @@ class MainActivity : AppCompatActivity() {
             firstResume = false
             return
         }
+        // 设置页里可能改了追帧阈值或分辨率上限
+        applyPageScripts(reload = true)
         // 从设置页回来后，白名单可能已变化：当前页不再合法就回首页
         val current = webView.url
         if (current.isNullOrBlank() || current == "about:blank") {
@@ -150,6 +172,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         refreshHandler.removeCallbacks(refreshTick)
         stopWatchdog()
+        stats?.close()
         contentFrame.removeView(webView)
         webView.destroy()
         super.onDestroy()
@@ -178,6 +201,7 @@ class MainActivity : AppCompatActivity() {
         // 首页和视频全屏播放时跳过本轮；上次加载卡住时，重新加载正好起到重试作用
         if (onPage && customView == null) {
             autoReloading = true
+            reloadReason = "定时刷新"
             webView.reload()
         }
         scheduleAutoRefresh()
@@ -245,8 +269,10 @@ class MainActivity : AppCompatActivity() {
         lastRecoverAt = now
         autoReloading = true
         if (rebuild) {
+            reloadReason = "卡死恢复（重建 WebView）"
             rebuildWebView(url)
         } else {
+            reloadReason = "卡死恢复（响应慢）"
             webView.stopLoading()
             webView.reload()
         }
@@ -261,6 +287,9 @@ class MainActivity : AppCompatActivity() {
         val old = webView
         val index = contentFrame.indexOfChild(old).coerceAtLeast(0)
         contentFrame.removeView(old)
+        // 旧 WebView 上的注入随它一起销毁，新 WebView 按当前配置重新注入
+        pageScripts = null
+        pageScriptsConfig = ""
         old.destroy()
 
         val fresh = WebView(this)
@@ -275,6 +304,7 @@ class MainActivity : AppCompatActivity() {
         )
         webView = fresh
         setupWebView()
+        applyPageScripts(reload = false)
         pageLoading = false
         currentUrl = null
         if (!resumed) fresh.onPause()
@@ -284,6 +314,124 @@ class MainActivity : AppCompatActivity() {
             showQuickAccess(true)
         }
         if (resumed) scheduleWatchdog(WATCHDOG_INTERVAL_MS)
+    }
+
+    // ---- 诊断模式与按延迟追帧 ----
+
+    private fun setupDiagOverlay() {
+        val density = resources.displayMetrics.density
+        diagOverlay = TextView(this).apply {
+            setBackgroundColor(0xCC202124.toInt())
+            setTextColor(0xFFE8EAED.toInt())
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
+            val pad = (8 * density).toInt()
+            setPadding(pad, pad, pad, pad)
+            visibility = View.GONE
+            // 不可点击，触摸照常落到下面的网页
+            isClickable = false
+            isFocusable = false
+        }
+        val margin = (8 * density).toInt()
+        contentFrame.addView(
+            diagOverlay,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.END,
+            ).apply { setMargins(margin, margin, margin, margin) },
+        )
+    }
+
+    /**
+     * 按诊断开关、追帧阈值、分辨率上限决定注入哪些脚本。配置没变不动；变了就整体重装，
+     * reload 为 true 时重新加载当前页面让新脚本生效。返回是否已触发重新加载。
+     */
+    private fun applyPageScripts(reload: Boolean): Boolean {
+        val catchUp = AppPrefs.catchUpSec(this)
+        val ratioCap = AppPrefs.pixelRatioCap(this)
+        val needStats = diagOn || catchUp > 0
+
+        val key = when {
+            !needStats -> ""
+            diagOn -> "log"
+            else -> "nolog"
+        }
+        if (key != statsKey) {
+            stats?.close()
+            stats = when (key) {
+                "" -> null
+                "log" -> DiagStats(getExternalFilesDir("diag"))
+                else -> DiagStats(null)
+            }
+            statsKey = key
+        }
+
+        if ((needStats && !PageScripts.diagSupported()) || (ratioCap > 0f && !PageScripts.ratioSupported())) {
+            if (!unsupportedWarned) {
+                unsupportedWarned = true
+                Toast.makeText(this, R.string.page_scripts_unsupported, Toast.LENGTH_LONG).show()
+            }
+        }
+
+        val config = "$needStats|$ratioCap"
+        if (config == pageScriptsConfig) return false
+        pageScripts?.remove()
+        pageScripts = PageScripts.install(this, webView, needStats, ratioCap, diagListener)
+        pageScriptsConfig = config
+        if (!reload || currentUrl == null) return false
+        reloadReason = "页面脚本变更"
+        autoReloading = true
+        webView.reload()
+        return true
+    }
+
+    private fun toggleDiag() {
+        if (!PageScripts.diagSupported()) {
+            Toast.makeText(this, R.string.page_scripts_unsupported, Toast.LENGTH_LONG).show()
+            return
+        }
+        diagOn = !diagOn
+        diagOverlay.visibility = if (diagOn) View.VISIBLE else View.GONE
+        val reloaded = applyPageScripts(reload = true)
+        // 统计对象换了，从新文档开始统计，"较打开时"的基准才准确
+        if (!reloaded && currentUrl != null) {
+            reloadReason = if (diagOn) "开启诊断" else "关闭诊断"
+            autoReloading = true
+            webView.reload()
+        }
+        if (diagOn) {
+            diagOverlay.text = stats?.render()
+            val path = stats?.logPath
+            val text = if (path != null) getString(R.string.diag_on_log, path) else getString(R.string.diag_on_no_log)
+            Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(this, R.string.diag_off, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun onDiagMessage(data: String?) {
+        val s = stats ?: return
+        val catchUpMs = AppPrefs.catchUpSec(this) * 1000L
+        if (s.accept(data, catchUpMs)) catchUp()
+        if (diagOn) diagOverlay.text = s.render()
+        if (catchUpMs > 0 && !noTimestampWarned && currentUrl != null &&
+            s.hasConnection() && !s.hasTimestamp() && s.sinceNavigationMs() > NO_TIMESTAMP_WARN_MS
+        ) {
+            noTimestampWarned = true
+            Toast.makeText(this, R.string.catch_up_no_timestamp, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** 页面比打开时落后超过阈值：重新加载，直接从服务端拿最新状态。 */
+    private fun catchUp() {
+        if (currentUrl == null || customView != null || pageLoading) return
+        val now = SystemClock.elapsedRealtime()
+        if (lastCatchUpAt != 0L && now - lastCatchUpAt < CATCH_UP_COOLDOWN_MS) return
+        lastCatchUpAt = now
+        reloadReason = "按延迟追帧"
+        autoReloading = true
+        webView.reload()
     }
 
     // ---- 书签与快捷方格 ----
@@ -428,9 +576,14 @@ class MainActivity : AppCompatActivity() {
             R.string.auto_refresh_menu,
             RefreshInterval.label(this, AppPrefs.refreshIntervalSec(this)),
         ))
-        popup.menu.add(0, 2, 3, R.string.settings_title)
+        popup.menu.add(0, 4, 3, R.string.diag_mode).apply {
+            isCheckable = true
+            isChecked = diagOn
+        }
+        popup.menu.add(0, 2, 4, R.string.settings_title)
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                4 -> toggleDiag()
                 3 -> RefreshInterval.show(this) { scheduleAutoRefresh() }
                 0 -> goHome()
                 1 -> bookmarkLauncher.launch(Intent(this, BookmarksActivity::class.java))
@@ -469,7 +622,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun reloadPage() {
         val url = webView.url
-        if (url.isNullOrBlank() || url == "about:blank") refreshQuickAccess() else webView.reload()
+        if (url.isNullOrBlank() || url == "about:blank") {
+            refreshQuickAccess()
+            return
+        }
+        reloadReason = "手动刷新"
+        webView.reload()
     }
 
     /** 主框架导航是否放行；about:blank 仅作为空白页放行。 */
@@ -527,6 +685,8 @@ class MainActivity : AppCompatActivity() {
                     view.stopLoading()
                     return
                 }
+                stats?.markNavigation(reloadReason ?: if (url == "about:blank") "回到首页" else "导航")
+                reloadReason = null
                 showQuickAccess(url == "about:blank")
                 pageLoading = true
                 loadStartedAt = SystemClock.elapsedRealtime()
@@ -572,6 +732,8 @@ class MainActivity : AppCompatActivity() {
                 lastGoneAt = now
                 val url = currentUrl
                 autoReloading = true
+                // 反复崩溃时直接回首页不会再加载页面，原因当场记下，免得挂到用户下一次导航上
+                if (looping) stats?.markNavigation("渲染进程反复崩溃，回到首页") else reloadReason = "渲染进程崩溃恢复"
                 // 回调内同步销毁自身不安全，投递到下一轮消息再重建
                 refreshHandler.post { rebuildWebView(if (looping) null else url) }
                 return true
@@ -695,6 +857,8 @@ class MainActivity : AppCompatActivity() {
         private const val POST_LOAD_QUIET_MS = 5_000L
         private const val LOAD_GRACE_MS = 20_000L
         private const val RENDER_GONE_LOOP_MS = 10_000L
+        private const val CATCH_UP_COOLDOWN_MS = 30_000L      // 两次追帧刷新之间的最短间隔
+        private const val NO_TIMESTAMP_WARN_MS = 20_000L      // 开启追帧后这么久还没识别到时间戳就提示一次
     }
 
     private fun setupBackHandling() {

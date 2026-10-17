@@ -46,6 +46,18 @@ class SettingsActivity : AppCompatActivity() {
         }
         updateIntervalLabel()
         intervalButton.setOnClickListener { RefreshInterval.show(this) { updateIntervalLabel() } }
+        val catchUpButton = findViewById<Button>(R.id.btnCatchUp)
+        fun updateCatchUpLabel() {
+            catchUpButton.text = LatencyOptions.catchUpLabel(this, AppPrefs.catchUpSec(this))
+        }
+        updateCatchUpLabel()
+        catchUpButton.setOnClickListener { LatencyOptions.showCatchUp(this) { updateCatchUpLabel() } }
+        val ratioButton = findViewById<Button>(R.id.btnPixelRatio)
+        fun updateRatioLabel() {
+            ratioButton.text = LatencyOptions.ratioLabel(this, AppPrefs.pixelRatioCap(this))
+        }
+        updateRatioLabel()
+        ratioButton.setOnClickListener { LatencyOptions.showPixelRatio(this) { updateRatioLabel() } }
         findViewById<ImageButton>(R.id.btnClose).setOnClickListener { finish() }
         findViewById<View>(R.id.btnAdd).setOnClickListener { submit() }
         input.setOnEditorActionListener { _, actionId, _ ->
