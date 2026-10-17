@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Message
+import android.text.InputType
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -33,6 +34,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -51,7 +53,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStar: ImageButton
     private lateinit var quickAccess: View
     private lateinit var tileContainer: LinearLayout
-    private lateinit var quickEmpty: View
+    private lateinit var homeInput: EditText
 
     private val bookmarkLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -80,19 +82,14 @@ class MainActivity : AppCompatActivity() {
         btnStar = findViewById(R.id.btnStar)
         quickAccess = findViewById(R.id.quickAccess)
         tileContainer = findViewById(R.id.tileContainer)
-        quickEmpty = findViewById(R.id.quickEmpty)
+        homeInput = findViewById(R.id.homeInput)
 
         setupWebView()
         setupButtons()
         setupBackHandling()
 
-        if (Whitelist.home(this) == null) {
-            showQuickAccess(true)
-            Toast.makeText(this, R.string.empty_whitelist, Toast.LENGTH_LONG).show()
-            startActivity(Intent(this, SettingsActivity::class.java))
-        } else {
-            loadHome()
-        }
+        // 每次启动先显示首页（快捷方式），不自动打开任何网站
+        showQuickAccess(true)
     }
 
     override fun onResume() {
@@ -109,11 +106,10 @@ class MainActivity : AppCompatActivity() {
         }
         // 从设置页回来后，白名单可能已变化：当前页不再合法就回首页
         val current = webView.url
-        val home = Whitelist.home(this)
         if (current.isNullOrBlank() || current == "about:blank") {
-            if (home != null) webView.loadUrl(home) else showQuickAccess(true)
+            refreshQuickAccess()
         } else if (!Whitelist.isAllowed(this, current)) {
-            webView.loadUrl(home ?: "about:blank")
+            webView.loadUrl("about:blank")
         }
     }
 
@@ -148,29 +144,107 @@ class MainActivity : AppCompatActivity() {
         if (show) updateStar(null)
     }
 
+    /** 首页方格：全部书签 + 末尾的“添加快捷方式”。每行最多 7 个，整体居中。 */
     private fun refreshQuickAccess() {
         tileContainer.removeAllViews()
+        val density = resources.displayMetrics.density
+        val screenDp = resources.configuration.screenWidthDp
+        val columns = ((screenDp - 24) / 110).coerceIn(3, 7)
+        val widthPx = (columns * 110 * density).toInt()
+        for (view in listOf(tileContainer, homeInput)) {
+            val lp = view.layoutParams as LinearLayout.LayoutParams
+            lp.width = widthPx
+            view.layoutParams = lp
+        }
+
         val items = Bookmarks.load(this)
-        quickEmpty.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
-        val columns = maxOf(3, resources.configuration.screenWidthDp / 110)
-        for (chunk in items.chunked(columns)) {
+        for (chunk in (items.map<Bookmark, Bookmark?> { it } + null).chunked(columns)) {
             val row = LinearLayout(this)
             row.orientation = LinearLayout.HORIZONTAL
             for (i in 0 until columns) {
-                val item = chunk.getOrNull(i)
-                if (item == null) {
+                if (i >= chunk.size) {
                     row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
                     continue
                 }
+                val item = chunk[i]
                 val tile = layoutInflater.inflate(R.layout.item_tile, row, false)
                 tile.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                tile.findViewById<TextView>(R.id.tileIcon).text =
-                    item.title.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "#"
-                tile.findViewById<TextView>(R.id.tileTitle).text = item.title
-                tile.setOnClickListener { openUrl(item.url) }
+                val icon = tile.findViewById<TextView>(R.id.tileIcon)
+                val title = tile.findViewById<TextView>(R.id.tileTitle)
+                if (item == null) {
+                    icon.text = "+"
+                    icon.textSize = 26f
+                    title.setText(R.string.add_shortcut)
+                    tile.setOnClickListener { showAddShortcutDialog() }
+                } else {
+                    icon.text = item.title.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "#"
+                    title.text = item.title
+                    tile.setOnClickListener { openUrl(item.url) }
+                    tile.setOnLongClickListener {
+                        val popup = PopupMenu(this, tile)
+                        popup.menu.add(0, 1, 0, R.string.delete_shortcut)
+                        popup.setOnMenuItemClickListener {
+                            Bookmarks.remove(this, item.url)
+                            refreshQuickAccess()
+                            true
+                        }
+                        popup.show()
+                        true
+                    }
+                }
                 row.addView(tile)
             }
             tileContainer.addView(row)
+        }
+    }
+
+    private fun showAddShortcutDialog() {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val form = LinearLayout(this)
+        form.orientation = LinearLayout.VERTICAL
+        form.setPadding(pad, pad / 2, pad, 0)
+        val nameInput = EditText(this)
+        nameInput.setHint(R.string.shortcut_name_hint)
+        nameInput.setSingleLine()
+        nameInput.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        val urlInput = EditText(this)
+        urlInput.setHint(R.string.shortcut_url_hint)
+        urlInput.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        urlInput.setSingleLine()
+        urlInput.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        form.addView(nameInput)
+        form.addView(urlInput)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.add_shortcut)
+            .setView(form)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                addShortcut(nameInput.text.toString(), urlInput.text.toString())
+            }
+            .show()
+    }
+
+    /** 添加快捷方式：同时把域名加入白名单（已存在则忽略）。 */
+    private fun addShortcut(name: String, rawUrl: String) {
+        val raw = rawUrl.trim()
+        if (raw.isEmpty()) return
+        val url = if (raw.contains("://")) raw else "https://$raw"
+        val validScheme = url.startsWith("http://", true) || url.startsWith("https://", true)
+        if (!validScheme || Whitelist.normalize(url) == null) {
+            Toast.makeText(this, R.string.shortcut_invalid, Toast.LENGTH_SHORT).show()
+            return
+        }
+        Whitelist.add(this, url)
+        Bookmarks.add(this, name, url)
+        refreshQuickAccess()
+        Toast.makeText(this, R.string.shortcut_added, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun goHome() {
+        if (webView.url == "about:blank" || webView.url.isNullOrBlank()) {
+            showQuickAccess(true)
+        } else {
+            webView.loadUrl("about:blank")
         }
     }
 
@@ -194,10 +268,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun showMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
-        popup.menu.add(0, 1, 0, R.string.bookmarks)
-        popup.menu.add(0, 2, 1, R.string.settings_title)
+        popup.menu.add(0, 0, 0, R.string.home)
+        popup.menu.add(0, 1, 1, R.string.bookmarks)
+        popup.menu.add(0, 2, 2, R.string.settings_title)
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                0 -> goHome()
                 1 -> bookmarkLauncher.launch(Intent(this, BookmarksActivity::class.java))
                 2 -> startActivity(Intent(this, SettingsActivity::class.java))
             }
@@ -232,18 +308,9 @@ class MainActivity : AppCompatActivity() {
 
     // ---- 页面加载与白名单 ----
 
-    private fun loadHome() {
-        val home = Whitelist.home(this)
-        if (home == null) {
-            startActivity(Intent(this, SettingsActivity::class.java))
-        } else {
-            webView.loadUrl(home)
-        }
-    }
-
     private fun reloadPage() {
         val url = webView.url
-        if (url.isNullOrBlank() || url == "about:blank") loadHome() else webView.reload()
+        if (url.isNullOrBlank() || url == "about:blank") refreshQuickAccess() else webView.reload()
     }
 
     /** 主框架导航是否放行；about:blank 仅作为空白页放行。 */
@@ -404,19 +471,22 @@ class MainActivity : AppCompatActivity() {
         makeDraggable(findViewById(R.id.floatRefresh), floatPill) { reloadPage() }
         makeDraggable(findViewById(R.id.floatExit), floatPill) { setFullscreen(false) }
 
-        addressBar.setOnEditorActionListener { v, actionId, _ ->
-            if (actionId != EditorInfo.IME_ACTION_GO) return@setOnEditorActionListener false
-            val raw = v.text.toString().trim()
-            if (raw.isNotEmpty()) {
-                val url = if (raw.contains("://")) raw else "https://$raw"
-                if (permit(url)) {
-                    webView.loadUrl(url)
-                    v.clearFocus()
-                    (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
-                        .hideSoftInputFromWindow(v.windowToken, 0)
+        for (field in listOf(addressBar, homeInput)) {
+            field.setOnEditorActionListener { v, actionId, _ ->
+                if (actionId != EditorInfo.IME_ACTION_GO) return@setOnEditorActionListener false
+                val raw = v.text.toString().trim()
+                if (raw.isNotEmpty()) {
+                    val url = if (raw.contains("://")) raw else "https://$raw"
+                    if (permit(url)) {
+                        webView.loadUrl(url)
+                        v.text = ""
+                        v.clearFocus()
+                        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+                            .hideSoftInputFromWindow(v.windowToken, 0)
+                    }
                 }
+                true
             }
-            true
         }
     }
 

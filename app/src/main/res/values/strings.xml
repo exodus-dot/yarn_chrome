@@ -18,6 +18,14 @@
     <string name="bookmark_added">已添加书签</string>
     <string name="bookmark_removed">已取消书签</string>
     <string name="bookmarks_empty">暂无书签。打开页面后点工具栏的星标即可添加。</string>
+    <string name="home">首页</string>
+    <string name="home_input_hint">输入网址</string>
+    <string name="add_shortcut">添加快捷方式</string>
+    <string name="shortcut_name_hint">名称（可不填）</string>
+    <string name="shortcut_url_hint">网址，例如 github.com</string>
+    <string name="shortcut_added">已添加，该域名已加入白名单</string>
+    <string name="shortcut_invalid">网址格式不正确</string>
+    <string name="delete_shortcut">删除快捷方式</string>
     <string name="more">更多</string>
     <string name="autofill_title">密码</string>
     <string name="autofill_desc">浏览器不保存密码，由系统自动填充服务（如 Google 密码管理器、Bitwarden）保存和填充。</string>
