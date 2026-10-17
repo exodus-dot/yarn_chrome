@@ -1,0 +1,59 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'windows/**'
+      - '.github/workflows/build-windows.yml'
+  pull_request:
+    paths:
+      - 'windows/**'
+      - '.github/workflows/build-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # 自包含发布：目标机器不需要安装 .NET，只需要系统里有 WebView2 运行时（Win11 自带，Win10 多数已随 Edge 安装）
+      - name: Publish win-x64
+        run: >
+          dotnet publish windows/YarnChrome.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Compress-Archive -Path publish/* -DestinationPath "yarn-chrome-windows-x64-build${{ github.run_number }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yarn-chrome-windows
+          path: yarn-chrome-windows-*.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('windows-build-{0}', github.run_number) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('Windows Build {0}', github.run_number) }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: yarn-chrome-windows-*.zip
