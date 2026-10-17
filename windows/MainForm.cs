@@ -341,14 +341,11 @@ public sealed class MainForm : Form
         core.DownloadStarting += (_, e) => e.Cancel = true;
         core.ProcessFailed += (_, e) => BeginInvoke(new Action(() => OnProcessFailed(e.ProcessFailedKind)));
         core.ContainsFullScreenElementChanged += (_, _) => OnVideoFullscreenChanged(core.ContainsFullScreenElement);
-        if (web.CoreWebView2Controller != null)
+        // 焦点在网页里时，控件把快捷键转成自身的 KeyDown，Handled 会回传给 WebView2
+        web.KeyDown += (_, e) =>
         {
-            web.CoreWebView2Controller.AcceleratorKeyPressed += (_, e) =>
-            {
-                if (e.KeyEventKind is not (CoreWebView2KeyEventKind.KeyDown or CoreWebView2KeyEventKind.SystemKeyDown)) return;
-                if (HandleShortcut((Keys)e.VirtualKey)) e.Handled = true;
-            };
-        }
+            if (HandleShortcut(e.KeyCode)) e.Handled = true;
+        };
         return true;
     }
 
@@ -703,7 +700,7 @@ public sealed class MainForm : Form
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
-        // 焦点在地址栏等普通控件上时走这里；焦点在网页里时走 AcceleratorKeyPressed
+        // 焦点在地址栏等普通控件上时走这里；焦点在网页里时走 web.KeyDown
         if (HandleShortcut(keyData & Keys.KeyCode)) return true;
         return base.ProcessCmdKey(ref msg, keyData);
     }
