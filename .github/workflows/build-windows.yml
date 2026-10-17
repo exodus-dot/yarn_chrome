@@ -56,4 +56,6 @@ jobs:
           name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('Windows Build {0}', github.run_number) }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
+          # 仓库首页的 Latest 留给 Android APK；v* 标签与 APK 共用同一个 Release，保持默认
+          make_latest: ${{ startsWith(github.ref, 'refs/tags/v') && 'true' || 'false' }}
           files: yarn-chrome-windows-*.zip
