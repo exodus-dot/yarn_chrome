@@ -9,7 +9,7 @@
     <string name="address_hint">输入网址</string>
     <string name="blocked">已拦截：%1$s</string>
     <string name="empty_whitelist">白名单为空，请先添加允许访问的域名</string>
-    <string name="settings_title">白名单设置</string>
+    <string name="settings_title">设置</string>
     <string name="settings_desc">仅允许访问列表内的域名及其子域名，其他页面和弹窗会被自动拦截。列表第一项作为首页。</string>
     <string name="keep_screen_on">保持屏幕常亮</string>
     <string name="keep_screen_on_desc">开启后，浏览器在前台时屏幕不会自动熄灭。</string>
