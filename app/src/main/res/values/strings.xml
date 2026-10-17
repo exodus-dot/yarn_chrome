@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Yarn 浏览器</string>
+    <string name="back">后退</string>
+    <string name="refresh">刷新</string>
+    <string name="enter_fullscreen">全屏</string>
+    <string name="exit_fullscreen">退出全屏</string>
+    <string name="whitelist">白名单</string>
+    <string name="address_hint">输入网址</string>
+    <string name="blocked">已拦截：%1$s</string>
+    <string name="empty_whitelist">白名单为空，请先添加允许访问的域名</string>
+    <string name="settings_title">白名单设置</string>
+    <string name="settings_desc">仅允许访问列表内的域名及其子域名，其他页面和弹窗会被自动拦截。列表第一项作为首页。</string>
+    <string name="domain_hint">例如 example.com</string>
+    <string name="add">添加</string>
+    <string name="remove">删除</string>
+    <string name="invalid_domain">域名格式不正确</string>
+    <string name="domain_exists">该域名已在白名单中</string>
+</resources>
