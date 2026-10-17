@@ -26,9 +26,13 @@ import android.net.http.SslError
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -44,6 +48,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var addressBar: EditText
     private lateinit var btnBack: ImageButton
     private lateinit var floatPill: View
+    private lateinit var btnStar: ImageButton
+    private lateinit var quickAccess: View
+    private lateinit var tileContainer: LinearLayout
+    private lateinit var quickEmpty: View
+
+    private val bookmarkLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            result.data?.getStringExtra(BookmarksActivity.EXTRA_URL)?.let { openUrl(it) }
+        }
 
     private var fullscreen = false
     private var firstResume = true
@@ -64,12 +77,17 @@ class MainActivity : AppCompatActivity() {
         addressBar = findViewById(R.id.addressBar)
         btnBack = findViewById(R.id.btnBack)
         floatPill = findViewById(R.id.floatPill)
+        btnStar = findViewById(R.id.btnStar)
+        quickAccess = findViewById(R.id.quickAccess)
+        tileContainer = findViewById(R.id.tileContainer)
+        quickEmpty = findViewById(R.id.quickEmpty)
 
         setupWebView()
         setupButtons()
         setupBackHandling()
 
         if (Whitelist.home(this) == null) {
+            showQuickAccess(true)
             Toast.makeText(this, R.string.empty_whitelist, Toast.LENGTH_LONG).show()
             startActivity(Intent(this, SettingsActivity::class.java))
         } else {
@@ -93,7 +111,7 @@ class MainActivity : AppCompatActivity() {
         val current = webView.url
         val home = Whitelist.home(this)
         if (current.isNullOrBlank() || current == "about:blank") {
-            if (home != null) webView.loadUrl(home)
+            if (home != null) webView.loadUrl(home) else showQuickAccess(true)
         } else if (!Whitelist.isAllowed(this, current)) {
             webView.loadUrl(home ?: "about:blank")
         }
@@ -115,6 +133,77 @@ class MainActivity : AppCompatActivity() {
         // 旋转后悬浮按钮回到默认角落，避免跑出屏幕
         floatPill.translationX = 0f
         floatPill.translationY = 0f
+        if (quickAccess.visibility == View.VISIBLE) refreshQuickAccess()
+    }
+
+    // ---- 书签与快捷方格 ----
+
+    private fun openUrl(url: String) {
+        if (permit(url)) webView.loadUrl(url)
+    }
+
+    private fun showQuickAccess(show: Boolean) {
+        if (show) refreshQuickAccess()
+        quickAccess.visibility = if (show) View.VISIBLE else View.GONE
+        if (show) updateStar(null)
+    }
+
+    private fun refreshQuickAccess() {
+        tileContainer.removeAllViews()
+        val items = Bookmarks.load(this)
+        quickEmpty.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
+        val columns = maxOf(3, resources.configuration.screenWidthDp / 110)
+        for (chunk in items.chunked(columns)) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            for (i in 0 until columns) {
+                val item = chunk.getOrNull(i)
+                if (item == null) {
+                    row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+                    continue
+                }
+                val tile = layoutInflater.inflate(R.layout.item_tile, row, false)
+                tile.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                tile.findViewById<TextView>(R.id.tileIcon).text =
+                    item.title.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "#"
+                tile.findViewById<TextView>(R.id.tileTitle).text = item.title
+                tile.setOnClickListener { openUrl(item.url) }
+                row.addView(tile)
+            }
+            tileContainer.addView(row)
+        }
+    }
+
+    private fun updateStar(url: String?) {
+        val starred = !url.isNullOrBlank() && Bookmarks.contains(this, url)
+        btnStar.setImageResource(if (starred) R.drawable.ic_star else R.drawable.ic_star_outline)
+    }
+
+    private fun toggleBookmark() {
+        val url = webView.url
+        if (url.isNullOrBlank() || !(url.startsWith("http://") || url.startsWith("https://"))) return
+        if (Bookmarks.contains(this, url)) {
+            Bookmarks.remove(this, url)
+            Toast.makeText(this, R.string.bookmark_removed, Toast.LENGTH_SHORT).show()
+        } else {
+            Bookmarks.add(this, webView.title, url)
+            Toast.makeText(this, R.string.bookmark_added, Toast.LENGTH_SHORT).show()
+        }
+        updateStar(url)
+    }
+
+    private fun showMenu(anchor: View) {
+        val popup = PopupMenu(this, anchor)
+        popup.menu.add(0, 1, 0, R.string.bookmarks)
+        popup.menu.add(0, 2, 1, R.string.settings_title)
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> bookmarkLauncher.launch(Intent(this, BookmarksActivity::class.java))
+                2 -> startActivity(Intent(this, SettingsActivity::class.java))
+            }
+            true
+        }
+        popup.show()
     }
 
     // ---- 快捷键：F11 / Ctrl+Shift+F 全屏，F5 / Ctrl+R 刷新，Esc 退出全屏 ----
@@ -190,6 +279,10 @@ class MainActivity : AppCompatActivity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         }
         webView.setDownloadListener(DownloadListener { _, _, _, _, _ -> })
+        // 让系统自动填充服务（密码管理器）可以识别页面里的登录表单
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            webView.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
+        }
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -208,18 +301,22 @@ class MainActivity : AppCompatActivity() {
                     view.stopLoading()
                     return
                 }
+                showQuickAccess(url == "about:blank")
                 progress.visibility = View.VISIBLE
-                if (!addressBar.hasFocus()) addressBar.setText(url)
+                if (!addressBar.hasFocus()) addressBar.setText(if (url == "about:blank") "" else url)
                 updateBackState()
+                updateStar(url)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
                 progress.visibility = View.GONE
                 updateBackState()
+                updateStar(url)
             }
 
             override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
                 updateBackState()
+                updateStar(url)
             }
 
             override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
@@ -301,9 +398,8 @@ class MainActivity : AppCompatActivity() {
         btnBack.setOnClickListener { if (webView.canGoBack()) webView.goBack() }
         findViewById<ImageButton>(R.id.btnRefresh).setOnClickListener { reloadPage() }
         findViewById<ImageButton>(R.id.btnFullscreen).setOnClickListener { setFullscreen(true) }
-        findViewById<ImageButton>(R.id.btnWhitelist).setOnClickListener {
-            startActivity(Intent(this, SettingsActivity::class.java))
-        }
+        btnStar.setOnClickListener { toggleBookmark() }
+        findViewById<ImageButton>(R.id.btnMenu).setOnClickListener { showMenu(it) }
 
         makeDraggable(findViewById(R.id.floatRefresh), floatPill) { reloadPage() }
         makeDraggable(findViewById(R.id.floatExit), floatPill) { setFullscreen(false) }
