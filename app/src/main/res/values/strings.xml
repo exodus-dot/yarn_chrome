@@ -26,6 +26,15 @@
     <string name="shortcut_added">已添加，该域名已加入白名单</string>
     <string name="shortcut_invalid">网址格式不正确</string>
     <string name="delete_shortcut">删除快捷方式</string>
+    <string name="auto_refresh">定时刷新</string>
+    <string name="auto_refresh_menu">定时刷新：%1$s</string>
+    <string name="auto_refresh_desc">按设定间隔自动刷新当前网页，应用在后台时暂停。刷新沿用原生重新加载，新内容绘制前保留旧画面，多数网站不会闪白屏，个别网站切换瞬间可能闪一下。</string>
+    <string name="interval_off">关闭</string>
+    <string name="interval_seconds">%1$d 秒</string>
+    <string name="interval_minutes">%1$d 分钟</string>
+    <string name="interval_custom">自定义</string>
+    <string name="interval_custom_hint">秒数（5 到 86400）</string>
+    <string name="interval_invalid">请输入 5 到 86400 之间的整数</string>
     <string name="more">更多</string>
     <string name="autofill_title">密码</string>
     <string name="autofill_desc">浏览器不保存密码，由系统自动填充服务（如 Google 密码管理器、Bitwarden）保存和填充。</string>

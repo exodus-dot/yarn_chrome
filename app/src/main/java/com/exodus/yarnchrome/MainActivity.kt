@@ -7,6 +7,8 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.Message
 import android.text.InputType
 import android.view.KeyEvent
@@ -60,6 +62,10 @@ class MainActivity : AppCompatActivity() {
             result.data?.getStringExtra(BookmarksActivity.EXTRA_URL)?.let { openUrl(it) }
         }
 
+    private val refreshHandler = Handler(Looper.getMainLooper())
+    private val refreshTick = Runnable { onRefreshTick() }
+    private var autoReloading = false
+
     private var fullscreen = false
     private var firstResume = true
     private var lastBlockedToastAt = 0L
@@ -100,6 +106,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+        scheduleAutoRefresh()
         if (firstResume) {
             firstResume = false
             return
@@ -114,11 +121,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        refreshHandler.removeCallbacks(refreshTick)
         webView.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
+        refreshHandler.removeCallbacks(refreshTick)
         contentFrame.removeView(webView)
         webView.destroy()
         super.onDestroy()
@@ -130,6 +139,26 @@ class MainActivity : AppCompatActivity() {
         floatPill.translationX = 0f
         floatPill.translationY = 0f
         if (quickAccess.visibility == View.VISIBLE) refreshQuickAccess()
+    }
+
+    // ---- 定时刷新 ----
+
+    /** 按当前设置重新排期；间隔为 0 则只取消。应用在后台时不排期（onPause 已取消）。 */
+    private fun scheduleAutoRefresh() {
+        refreshHandler.removeCallbacks(refreshTick)
+        val seconds = AppPrefs.refreshIntervalSec(this)
+        if (seconds > 0) refreshHandler.postDelayed(refreshTick, seconds * 1000L)
+    }
+
+    private fun onRefreshTick() {
+        val url = webView.url
+        val onPage = !url.isNullOrBlank() && url != "about:blank"
+        // 首页和视频全屏播放时跳过本轮；上次加载卡住时，重新加载正好起到重试作用
+        if (onPage && customView == null) {
+            autoReloading = true
+            webView.reload()
+        }
+        scheduleAutoRefresh()
     }
 
     // ---- 书签与快捷方格 ----
@@ -270,9 +299,14 @@ class MainActivity : AppCompatActivity() {
         val popup = PopupMenu(this, anchor)
         popup.menu.add(0, 0, 0, R.string.home)
         popup.menu.add(0, 1, 1, R.string.bookmarks)
-        popup.menu.add(0, 2, 2, R.string.settings_title)
+        popup.menu.add(0, 3, 2, getString(
+            R.string.auto_refresh_menu,
+            RefreshInterval.label(this, AppPrefs.refreshIntervalSec(this)),
+        ))
+        popup.menu.add(0, 2, 3, R.string.settings_title)
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                3 -> RefreshInterval.show(this) { scheduleAutoRefresh() }
                 0 -> goHome()
                 1 -> bookmarkLauncher.launch(Intent(this, BookmarksActivity::class.java))
                 2 -> startActivity(Intent(this, SettingsActivity::class.java))
@@ -369,13 +403,15 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
                 showQuickAccess(url == "about:blank")
-                progress.visibility = View.VISIBLE
+                // 自动刷新不显示进度条，减少视觉打扰
+                progress.visibility = if (autoReloading) View.GONE else View.VISIBLE
                 if (!addressBar.hasFocus()) addressBar.setText(if (url == "about:blank") "" else url)
                 updateBackState()
                 updateStar(url)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
+                autoReloading = false
                 progress.visibility = View.GONE
                 updateBackState()
                 updateStar(url)

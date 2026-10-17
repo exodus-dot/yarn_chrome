@@ -9,6 +9,7 @@ import android.provider.Settings
 import android.view.View
 import android.view.autofill.AutofillManager
 import android.view.inputmethod.EditorInfo
+import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.LinearLayout
@@ -39,6 +40,12 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         setupAutofill()
+        val intervalButton = findViewById<Button>(R.id.btnRefreshInterval)
+        fun updateIntervalLabel() {
+            intervalButton.text = RefreshInterval.label(this, AppPrefs.refreshIntervalSec(this))
+        }
+        updateIntervalLabel()
+        intervalButton.setOnClickListener { RefreshInterval.show(this) { updateIntervalLabel() } }
         findViewById<ImageButton>(R.id.btnClose).setOnClickListener { finish() }
         findViewById<View>(R.id.btnAdd).setOnClickListener { submit() }
         input.setOnEditorActionListener { _, actionId, _ ->
