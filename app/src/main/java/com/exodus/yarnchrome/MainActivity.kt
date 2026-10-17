@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.os.SystemClock
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -19,6 +20,7 @@ import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.DownloadListener
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.SslErrorHandler
@@ -36,6 +38,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
@@ -65,6 +68,19 @@ class MainActivity : AppCompatActivity() {
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val refreshTick = Runnable { onRefreshTick() }
     private var autoReloading = false
+
+    // 页面健康检测：定时往页面主线程投一条极短脚本，回调的延迟就是主线程的响应延迟
+    private val watchdogTick = Runnable { onWatchdogTick() }
+    private var probeSentAt = 0L
+    private var slowProbes = 0
+    private var lastRecoverAt = 0L
+    private var pageLoading = false
+    private var probeGen = 0
+    private var quietUntil = 0L
+    private var loadStartedAt = 0L
+    private var lastGoneAt = 0L
+    private var resumed = false
+    private var currentUrl: String? = null
 
     private var fullscreen = false
     private var firstResume = true
@@ -107,6 +123,9 @@ class MainActivity : AppCompatActivity() {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
         scheduleAutoRefresh()
+        resumed = true
+        // 回到前台立刻体检一次，不等下一个周期
+        scheduleWatchdog(RESUME_PROBE_DELAY_MS)
         if (firstResume) {
             firstResume = false
             return
@@ -122,12 +141,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         refreshHandler.removeCallbacks(refreshTick)
+        stopWatchdog()
+        resumed = false
         webView.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
         refreshHandler.removeCallbacks(refreshTick)
+        stopWatchdog()
         contentFrame.removeView(webView)
         webView.destroy()
         super.onDestroy()
@@ -159,6 +181,109 @@ class MainActivity : AppCompatActivity() {
             webView.reload()
         }
         scheduleAutoRefresh()
+    }
+
+    // ---- 页面健康检测与恢复 ----
+
+    private fun scheduleWatchdog(delayMs: Long) {
+        refreshHandler.removeCallbacks(watchdogTick)
+        refreshHandler.postDelayed(watchdogTick, delayMs)
+    }
+
+    private fun stopWatchdog() {
+        refreshHandler.removeCallbacks(watchdogTick)
+        probeGen++            // 作废还在路上的探测回调
+        probeSentAt = 0L
+        slowProbes = 0
+    }
+
+    /**
+     * 每轮往页面主线程投一条空脚本，回调回来的耗时就是页面主线程的响应延迟。
+     * 连续几次过慢，或一条探测长时间不回，说明页面已卡死或被拖垮，自动恢复。
+     * 页面加载中、视频全屏、空白页、刚加载完的宽限期内不检测。
+     */
+    private fun onWatchdogTick() {
+        scheduleWatchdog(WATCHDOG_INTERVAL_MS)
+        val now = SystemClock.elapsedRealtime()
+        // 加载超过 LOAD_GRACE_MS 仍未结束（长连接、流式页面）也要检测，否则这类页面永远测不到
+        val loading = pageLoading && now - loadStartedAt < LOAD_GRACE_MS
+        if (!resumed || loading || customView != null || currentUrl == null || now < quietUntil) {
+            probeSentAt = 0L
+            slowProbes = 0
+            return
+        }
+        if (probeSentAt != 0L) {
+            // 上一条探测还没回来：超过上限就当作渲染进程挂死
+            if (now - probeSentAt >= HUNG_MS) recoverPage(rebuild = true)
+            return
+        }
+        val gen = probeGen
+        val sentAt = now
+        probeSentAt = sentAt
+        webView.evaluateJavascript("1") {
+            if (gen != probeGen) return@evaluateJavascript
+            probeSentAt = 0L
+            val latency = SystemClock.elapsedRealtime() - sentAt
+            if (latency >= SLOW_MS) {
+                slowProbes++
+                if (slowProbes >= SLOW_STREAK) recoverPage(rebuild = false)
+            } else {
+                slowProbes = 0
+            }
+        }
+    }
+
+    /** 恢复当前页面。rebuild=true 时连 WebView 一起重建，用于渲染进程挂死或被杀。 */
+    private fun recoverPage(rebuild: Boolean) {
+        probeGen++
+        probeSentAt = 0L
+        slowProbes = 0
+        val now = SystemClock.elapsedRealtime()
+        // 冷却：恢复后页面仍然很重时，不要反复重载把页面彻底拖死
+        if (now - lastRecoverAt < RECOVER_COOLDOWN_MS) return
+        val url = currentUrl ?: return
+        lastRecoverAt = now
+        autoReloading = true
+        if (rebuild) {
+            rebuildWebView(url)
+        } else {
+            webView.stopLoading()
+            webView.reload()
+        }
+    }
+
+    /**
+     * 丢弃旧 WebView，换一个全新的。Cookie 由进程级 CookieManager 保存，登录状态不丢。
+     * restoreUrl 为空则回到首页方格。
+     */
+    private fun rebuildWebView(restoreUrl: String?) {
+        stopWatchdog()
+        val old = webView
+        val index = contentFrame.indexOfChild(old).coerceAtLeast(0)
+        contentFrame.removeView(old)
+        old.destroy()
+
+        val fresh = WebView(this)
+        fresh.id = R.id.webView
+        contentFrame.addView(
+            fresh,
+            index,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        webView = fresh
+        setupWebView()
+        pageLoading = false
+        currentUrl = null
+        if (!resumed) fresh.onPause()
+        if (restoreUrl != null && Whitelist.isAllowed(this, restoreUrl)) {
+            fresh.loadUrl(restoreUrl)
+        } else {
+            showQuickAccess(true)
+        }
+        if (resumed) scheduleWatchdog(WATCHDOG_INTERVAL_MS)
     }
 
     // ---- 书签与快捷方格 ----
@@ -403,6 +528,11 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
                 showQuickAccess(url == "about:blank")
+                pageLoading = true
+                loadStartedAt = SystemClock.elapsedRealtime()
+                currentUrl = if (url == "about:blank") null else url
+                probeSentAt = 0L
+                slowProbes = 0
                 // 自动刷新不显示进度条，减少视觉打扰
                 progress.visibility = if (autoReloading) View.GONE else View.VISIBLE
                 if (!addressBar.hasFocus()) addressBar.setText(if (url == "about:blank") "" else url)
@@ -411,6 +541,9 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageFinished(view: WebView, url: String) {
+                pageLoading = false
+                // 页面刚加载完主线程本来就忙，给一段宽限期再开始计慢
+                quietUntil = SystemClock.elapsedRealtime() + POST_LOAD_QUIET_MS
                 autoReloading = false
                 progress.visibility = View.GONE
                 updateBackState()
@@ -425,6 +558,28 @@ class MainActivity : AppCompatActivity() {
             override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
                 handler.cancel()
             }
+
+            /**
+             * 渲染进程被系统回收或崩溃。不处理的话整个应用会被一起带走。
+             * 返回 true 表示由我们接管：重建 WebView 并回到刚才的页面；
+             * 10 秒内再次出现说明页面本身会把渲染进程撑爆，退回首页避免死循环。
+             */
+            @RequiresApi(Build.VERSION_CODES.O)
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                if (view !== webView) return true
+                val now = SystemClock.elapsedRealtime()
+                val looping = now - lastGoneAt < RENDER_GONE_LOOP_MS
+                lastGoneAt = now
+                val url = currentUrl
+                autoReloading = true
+                // 回调内同步销毁自身不安全，投递到下一轮消息再重建
+                refreshHandler.post { rebuildWebView(if (looping) null else url) }
+                return true
+            }
+        }
+        // 低内存时优先保住渲染进程，不让系统先杀它
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
         }
 
         webView.webChromeClient = object : WebChromeClient() {
@@ -528,6 +683,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateBackState() {
         btnBack.alpha = if (webView.canGoBack()) 1f else 0.35f
+    }
+
+    companion object {
+        private const val WATCHDOG_INTERVAL_MS = 3_000L
+        private const val RESUME_PROBE_DELAY_MS = 300L
+        private const val SLOW_MS = 1_500L            // 单次探测回调超过它算一次慢
+        private const val SLOW_STREAK = 3             // 连续慢几次触发重载
+        private const val HUNG_MS = 10_000L           // 一条探测这么久不回，判定渲染进程挂死
+        private const val RECOVER_COOLDOWN_MS = 30_000L
+        private const val POST_LOAD_QUIET_MS = 5_000L
+        private const val LOAD_GRACE_MS = 20_000L
+        private const val RENDER_GONE_LOOP_MS = 10_000L
     }
 
     private fun setupBackHandling() {
