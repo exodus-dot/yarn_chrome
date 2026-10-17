@@ -6,3 +6,7 @@ local.properties
 .DS_Store
 captures/
 .cxx/
+windows/bin/
+windows/obj/
+windows/publish/
+.vs/
