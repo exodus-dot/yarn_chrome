@@ -9,6 +9,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import java.net.IDN
 
 class SettingsActivity : AppCompatActivity() {
@@ -25,6 +26,12 @@ class SettingsActivity : AppCompatActivity() {
         list = findViewById(R.id.domainList)
         emptyView = findViewById(R.id.emptyView)
 
+        findViewById<SwitchCompat>(R.id.switchKeepOn).apply {
+            isChecked = AppPrefs.isKeepScreenOn(this@SettingsActivity)
+            setOnCheckedChangeListener { _, checked ->
+                AppPrefs.setKeepScreenOn(this@SettingsActivity, checked)
+            }
+        }
         findViewById<ImageButton>(R.id.btnClose).setOnClickListener { finish() }
         findViewById<View>(R.id.btnAdd).setOnClickListener { submit() }
         input.setOnEditorActionListener { _, actionId, _ ->
