@@ -46,13 +46,20 @@ public sealed class MainForm : Form
     private readonly TextBox homeInput = new();
     private readonly FlowLayoutPanel tiles = new();
     private readonly Label noticeLabel = new();
+    private readonly Label diagLabel = new();
 
     private readonly System.Windows.Forms.Timer refreshTimer = new();
     private readonly System.Windows.Forms.Timer watchdogTimer = new() { Interval = WatchdogIntervalMs };
     private readonly System.Windows.Forms.Timer noticeTimer = new() { Interval = 3_000 };
+    private readonly System.Windows.Forms.Timer diagTimer = new() { Interval = 1_000 };
 
     private WebView2 web = new();
     private CoreWebView2Environment? env;
+
+    // 诊断模式：开启后注入采集脚本，关闭时为 null
+    private Diag? diag;
+    private string? diagScriptId;
+    private string? reloadReason;      // 下一次导航的触发原因，写进诊断日志
 
     private string? currentUrl;
     private bool pageLoading;
@@ -91,6 +98,13 @@ public sealed class MainForm : Form
         noticeLabel.BackColor = Color.FromArgb(0x32, 0x33, 0x36);
         noticeLabel.ForeColor = Color.White;
         contentPanel.Controls.Add(noticeLabel);
+        diagLabel.AutoSize = true;
+        diagLabel.Visible = false;
+        diagLabel.Padding = new Padding(10, 8, 10, 8);
+        diagLabel.BackColor = Color.FromArgb(0x20, 0x21, 0x24);
+        diagLabel.ForeColor = Color.FromArgb(0xE8, 0xEA, 0xED);
+        diagLabel.SizeChanged += (_, _) => PositionDiag();
+        contentPanel.Controls.Add(diagLabel);
 
         Controls.Add(contentPanel);
         Controls.Add(topBar);
@@ -98,14 +112,17 @@ public sealed class MainForm : Form
         refreshTimer.Tick += (_, _) => OnRefreshTick();
         watchdogTimer.Tick += async (_, _) => await ProbeAsync();
         noticeTimer.Tick += (_, _) => { noticeTimer.Stop(); noticeLabel.Visible = false; };
+        diagTimer.Tick += (_, _) => { if (diag != null) diagLabel.Text = diag.Render(); };
 
-        contentPanel.Resize += (_, _) => PositionNotice();
+        contentPanel.Resize += (_, _) => { PositionNotice(); PositionDiag(); };
         homePanel.Resize += (_, _) => CenterHome();
         Load += async (_, _) => await StartAsync();
         FormClosing += (_, _) =>
         {
             refreshTimer.Stop();
             watchdogTimer.Stop();
+            diagTimer.Stop();
+            diag?.Dispose();
             SetThreadExecutionState(EsContinuous);
         };
     }
@@ -253,6 +270,7 @@ public sealed class MainForm : Form
             homePanel.Visible = true;
             homePanel.BringToFront();
             noticeLabel.BringToFront();
+            diagLabel.BringToFront();
             if (!addressBar.Focused) addressBar.Text = "";
         }
         else
@@ -274,6 +292,9 @@ public sealed class MainForm : Form
 
     private void PositionNotice() =>
         noticeLabel.Location = new Point(12, Math.Max(0, contentPanel.ClientSize.Height - noticeLabel.Height - 12));
+
+    private void PositionDiag() =>
+        diagLabel.Location = new Point(Math.Max(0, contentPanel.ClientSize.Width - diagLabel.Width - 12), 12);
 
     private void UpdateStar() =>
         btnStar.Text = Store.HasBookmark(currentUrl) ? "已收藏" : "收藏";
@@ -334,13 +355,21 @@ public sealed class MainForm : Form
         };
         core.NewWindowRequested += (_, e) =>
         {
-            // 弹窗一律不创建：没有用户手势直接丢弃，有手势的按白名单决定是否在当前页打开
-            e.Handled = true;
-            if (e.IsUserInitiated && Permit(e.Uri)) core.Navigate(e.Uri);
+            // 没有用户手势的弹窗直接丢弃；有手势的在独立小窗口里打开（像新标签），关闭后原页面照常使用
+            if (!e.IsUserInitiated || (e.Uri != Blank && !Permit(e.Uri)))
+            {
+                e.Handled = true;
+                return;
+            }
+            OpenPopup(e);
         };
         core.DownloadStarting += (_, e) => e.Cancel = true;
         core.ProcessFailed += (_, e) => BeginInvoke(new Action(() => OnProcessFailed(e.ProcessFailedKind)));
         core.ContainsFullScreenElementChanged += (_, _) => OnVideoFullscreenChanged(core.ContainsFullScreenElement);
+        core.WebMessageReceived += (_, e) => OnWebMessage(e);
+        // 页面内嵌 iframe 时，子框架的上报走各自的 Frame 事件
+        core.FrameCreated += (_, e) => e.Frame.WebMessageReceived += (_, m) => OnWebMessage(m);
+        if (diag != null) diagScriptId = await core.AddScriptToExecuteOnDocumentCreatedAsync(Diag.LoadScript());
         // 焦点在网页里时，控件把快捷键转成自身的 KeyDown，Handled 会回传给 WebView2
         web.KeyDown += (_, e) =>
         {
@@ -351,6 +380,8 @@ public sealed class MainForm : Form
 
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
     {
+        diag?.MarkNavigation(reloadReason ?? (e.Uri == Blank ? "回到首页" : "导航"));
+        reloadReason = null;
         if (e.Uri == Blank)
         {
             currentUrl = null;
@@ -377,6 +408,46 @@ public sealed class MainForm : Form
         // 页面刚加载完主线程本来就忙，给一段宽限期再开始计慢
         quietUntil = Stopwatch.GetTimestamp() + MsToTicks(PostLoadQuietMs);
         UpdateStar();
+    }
+
+    private async void OpenPopup(CoreWebView2NewWindowRequestedEventArgs e)
+    {
+        var deferral = e.GetDeferral();
+        var form = new Form { Text = "弹窗", Width = 900, Height = 700, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false };
+        var view = new WebView2 { Dock = DockStyle.Fill };
+        form.Controls.Add(view);
+        _ = form.Handle; // 先建好窗口句柄，WebView2 才能在不显示的窗口里初始化
+        try
+        {
+            await view.EnsureCoreWebView2Async(env);
+            var popup = view.CoreWebView2;
+            e.NewWindow = popup;
+            // 先不显示：拿到白名单内的目标地址后才弹出，被拦截则整个关掉，原页面不受影响
+            popup.NavigationStarting += (_, n) =>
+            {
+                if (n.Uri == Blank) return;
+                if (!Permit(n.Uri))
+                {
+                    n.Cancel = true;
+                    form.BeginInvoke(new Action(form.Close));
+                    return;
+                }
+                if (!form.Visible) form.BeginInvoke(new Action(() => { if (!form.IsDisposed && !form.Visible) form.Show(this); }));
+            };
+            popup.DocumentTitleChanged += (_, _) => form.Text = popup.DocumentTitle;
+            popup.WindowCloseRequested += (_, _) => form.BeginInvoke(new Action(form.Close));
+            popup.DownloadStarting += (_, d) => d.Cancel = true;
+            popup.NewWindowRequested += (_, n) => n.Handled = true;
+            form.FormClosed += (_, _) => form.Dispose();
+        }
+        catch (Exception ex) when (ex is COMException or ArgumentException or InvalidOperationException)
+        {
+            form.Dispose();
+        }
+        finally
+        {
+            deferral.Complete();
+        }
     }
 
     private bool Permit(string url)
@@ -449,10 +520,12 @@ public sealed class MainForm : Form
         lastRecoverAt = now;
         if (rebuild)
         {
+            reloadReason = "卡死恢复（重建控件）";
             await RebuildWebViewAsync(url);
         }
         else
         {
+            reloadReason = "卡死恢复（响应慢）";
             web.CoreWebView2.Stop();
             web.CoreWebView2.Reload();
         }
@@ -496,6 +569,7 @@ public sealed class MainForm : Form
             case CoreWebView2ProcessFailedKind.BrowserProcessExited:
                 // 整个浏览器进程没了，环境对象作废，必须重建环境和控件
                 env = null;
+                reloadReason = "浏览器进程退出，重建控件";
                 _ = RebuildWebViewAsync(currentUrl);
                 break;
             case CoreWebView2ProcessFailedKind.RenderProcessExited:
@@ -504,11 +578,70 @@ public sealed class MainForm : Form
                 var now = Stopwatch.GetTimestamp();
                 var looping = lastGoneAt != 0 && now - lastGoneAt < MsToTicks(RenderGoneLoopMs);
                 lastGoneAt = now;
+                reloadReason = looping ? "渲染进程反复崩溃，回到首页" : "渲染进程崩溃恢复";
                 // 短时间内再次崩溃说明页面本身会撑爆渲染进程，退回首页避免死循环
                 if (looping) web.CoreWebView2.Navigate(Blank);
                 else web.CoreWebView2.Reload();
                 break;
         }
+    }
+
+    // ---- 诊断模式 ----
+
+    private async Task ToggleDiagAsync()
+    {
+        var core = web.CoreWebView2;
+        if (core == null || rebuilding) return;
+        if (diag == null)
+        {
+            try
+            {
+                diag = new Diag();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                ShowNotice("无法创建诊断日志：" + ex.Message);
+                return;
+            }
+            var id = await core.AddScriptToExecuteOnDocumentCreatedAsync(Diag.LoadScript());
+            // 等待期间控件被重建过，新控件初始化时已经按 diag 注入，这里的 id 作废
+            if (core != web.CoreWebView2) return;
+            diagScriptId = id;
+            diagLabel.Text = diag.Render();
+            diagLabel.Visible = true;
+            diagLabel.BringToFront();
+            diagTimer.Start();
+            ShowNotice("诊断模式已开启，日志：" + diag.LogPath);
+        }
+        else
+        {
+            if (diagScriptId != null) core.RemoveScriptToExecuteOnDocumentCreated(diagScriptId);
+            diagScriptId = null;
+            diagTimer.Stop();
+            diagLabel.Visible = false;
+            diag.Dispose();
+            diag = null;
+            ShowNotice("诊断模式已关闭");
+        }
+        // 注入脚本只对新文档生效，重新加载当前页面让开关立即生效
+        if (currentUrl == null) return;
+        reloadReason = diag != null ? "开启诊断" : "关闭诊断";
+        core.Reload();
+    }
+
+    private void OnWebMessage(CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        if (diag == null) return;
+        string? text;
+        try
+        {
+            text = e.TryGetWebMessageAsString();
+        }
+        catch (ArgumentException)
+        {
+            return;                     // 页面发来的不是字符串，不是诊断数据
+        }
+        diag.Accept(text);
     }
 
     // ---- 导航、书签、菜单 ----
@@ -532,8 +665,13 @@ public sealed class MainForm : Form
     private void ReloadPage()
     {
         if (web.CoreWebView2 == null) return;
-        if (currentUrl == null) RefreshTiles();
-        else web.CoreWebView2.Reload();
+        if (currentUrl == null)
+        {
+            RefreshTiles();
+            return;
+        }
+        reloadReason = "手动刷新";
+        web.CoreWebView2.Reload();
     }
 
     private void ToggleBookmark()
@@ -587,6 +725,11 @@ public sealed class MainForm : Form
             marks.DropDownItems.Add(new ToolStripMenuItem(b.Title, null, (_, _) => OpenUrl(b.Url)) { ToolTipText = b.Url });
         }
         menu.Items.Add(marks);
+        menu.Items.Add(new ToolStripMenuItem("诊断模式", null, async (_, _) => await ToggleDiagAsync())
+        {
+            Checked = diag != null,
+            ShortcutKeyDisplayString = "Ctrl+Shift+D",
+        });
         menu.Items.Add("设置", null, (_, _) => ShowSettings());
         menu.Show(btnMenu, new Point(0, btnMenu.Height));
     }
@@ -616,6 +759,7 @@ public sealed class MainForm : Form
     {
         // 首页、视频全屏、重建中跳过本轮
         if (currentUrl == null || videoFullscreen || rebuilding || web.CoreWebView2 == null) return;
+        reloadReason = "定时刷新";
         web.CoreWebView2.Reload();
     }
 
@@ -674,6 +818,11 @@ public sealed class MainForm : Form
         {
             if (videoFullscreen) web.CoreWebView2?.ExecuteScriptAsync("document.exitFullscreen&&document.exitFullscreen()");
             else SetFullscreen(!fullscreen);
+            return true;
+        }
+        if (key == Keys.D && ctrl && shift)
+        {
+            _ = ToggleDiagAsync();
             return true;
         }
         if (key == Keys.F5 || (key == Keys.R && ctrl))

@@ -646,6 +646,86 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, getString(R.string.blocked, host), Toast.LENGTH_SHORT).show()
     }
 
+    private val blockedPopups = mutableListOf<WebView>()
+    private var popupLayer: android.widget.LinearLayout? = null
+    private var popupView: WebView? = null
+
+    private fun clearBlockedPopups() {
+        blockedPopups.forEach { it.destroy() }
+        blockedPopups.clear()
+    }
+
+    /** 在原页面之上用叠加层打开弹窗，顶部带关闭按钮；原页面保持原样。 */
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun showPopup(popup: WebView, url: String) {
+        closePopup()
+        popup.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = false
+            allowContentAccess = false
+        }
+        popup.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                val scheme = request.url.scheme?.lowercase()
+                if (scheme != "http" && scheme != "https") return true
+                return request.isForMainFrame && !permit(request.url.toString())
+            }
+
+            override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                handler.cancel()
+            }
+        }
+        popup.webChromeClient = object : WebChromeClient() {
+            override fun onCloseWindow(window: WebView) {
+                closePopup()
+            }
+        }
+        val dp = resources.displayMetrics.density
+        val bar = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setBackgroundColor(0xFF222222.toInt())
+            setPadding((12 * dp).toInt(), 0, 0, 0)
+        }
+        val title = android.widget.TextView(this).apply {
+            text = Uri.parse(url).host ?: url
+            setTextColor(0xFFFFFFFF.toInt())
+            maxLines = 1
+        }
+        val close = android.widget.Button(this).apply {
+            text = "✕"
+            setOnClickListener { closePopup() }
+        }
+        bar.addView(title, android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        bar.addView(close, android.widget.LinearLayout.LayoutParams((56 * dp).toInt(), (44 * dp).toInt()))
+        val layer = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setBackgroundColor(0xFF000000.toInt())
+            isClickable = true
+            addView(bar, android.widget.LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (44 * dp).toInt()))
+            addView(popup, android.widget.LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        contentFrame.addView(
+            layer,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+        )
+        popupLayer = layer
+        popupView = popup
+        popup.loadUrl(url)
+    }
+
+    private fun closePopup() {
+        val layer = popupLayer ?: return
+        val view = popupView
+        popupLayer = null
+        popupView = null
+        contentFrame.removeView(layer)
+        layer.removeAllViews()
+        view?.stopLoading()
+        view?.destroy()
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
         webView.settings.apply {
@@ -685,6 +765,7 @@ class MainActivity : AppCompatActivity() {
                     view.stopLoading()
                     return
                 }
+                clearBlockedPopups()
                 stats?.markNavigation(reloadReason ?: if (url == "about:blank") "回到首页" else "导航")
                 reloadReason = null
                 showQuickAccess(url == "about:blank")
@@ -763,9 +844,16 @@ class MainActivity : AppCompatActivity() {
                 fun resolve(url: String?) {
                     if (handled || url.isNullOrBlank() || url == "about:blank") return
                     handled = true
-                    if (permit(url)) webView.loadUrl(url)
-                    temp.stopLoading()
-                    temp.post { temp.destroy() }
+                    if (Whitelist.isAllowed(this@MainActivity, url)) {
+                        // 白名单内的弹窗像普通浏览器的新标签：叠在原页面上，关闭后回到原页面
+                        temp.post { showPopup(temp, url) }
+                    } else {
+                        // 被拦截的弹窗保持存活（页面检查 window.closed 时不会误判），
+                        // 原页面不受影响，下次主页面导航时再清理
+                        notifyBlocked(url)
+                        temp.stopLoading()
+                        blockedPopups.add(temp)
+                    }
                 }
                 temp.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -867,6 +955,10 @@ class MainActivity : AppCompatActivity() {
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
                     when {
+                        popupLayer != null -> {
+                            val p = popupView
+                            if (p != null && p.canGoBack()) p.goBack() else closePopup()
+                        }
                         customView != null -> webView.webChromeClient?.onHideCustomView()
                         fullscreen -> setFullscreen(false)
                         webView.canGoBack() -> webView.goBack()
