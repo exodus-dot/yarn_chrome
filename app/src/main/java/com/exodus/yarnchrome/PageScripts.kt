@@ -50,6 +50,11 @@ object PageScripts {
             hasListener = true
             handles += WebViewCompat.addDocumentStartJavaScript(webView, diagScript(context), ALL_ORIGINS)
         }
+        if (ratioSupported()) {
+            // 双击视频左右两侧快退/快进
+            val seek = context.assets.open("seek.js").bufferedReader(Charsets.UTF_8).use { it.readText() }
+            handles += WebViewCompat.addDocumentStartJavaScript(webView, seek, ALL_ORIGINS)
+        }
         if (ratioCap > 0f && ratioSupported()) {
             handles += WebViewCompat.addDocumentStartJavaScript(webView, ratioScript(ratioCap), ALL_ORIGINS)
         }

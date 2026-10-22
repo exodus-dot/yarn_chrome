@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="diag.js" LogicalName="YarnChrome.diag.js" />
+    <EmbeddedResource Include="seek.js" LogicalName="YarnChrome.seek.js" />
   </ItemGroup>
 
 </Project>

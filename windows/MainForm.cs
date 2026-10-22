@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -369,6 +371,9 @@ public sealed class MainForm : Form
         core.WebMessageReceived += (_, e) => OnWebMessage(e);
         // 页面内嵌 iframe 时，子框架的上报走各自的 Frame 事件
         core.FrameCreated += (_, e) => e.Frame.WebMessageReceived += (_, m) => OnWebMessage(m);
+        using (var seekStream = Assembly.GetExecutingAssembly().GetManifestResourceStream("YarnChrome.seek.js")!)
+        using (var seekReader = new StreamReader(seekStream, Encoding.UTF8))
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(seekReader.ReadToEnd());
         if (diag != null) diagScriptId = await core.AddScriptToExecuteOnDocumentCreatedAsync(Diag.LoadScript());
         // 焦点在网页里时，控件把快捷键转成自身的 KeyDown，Handled 会回传给 WebView2
         web.KeyDown += (_, e) =>
