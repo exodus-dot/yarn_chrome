@@ -63,4 +63,18 @@
     <string name="remove">删除</string>
     <string name="invalid_domain">域名格式不正确</string>
     <string name="domain_exists">该域名已在白名单中</string>
+    <string name="history">历史记录</string>
+    <string name="history_empty">暂无历史记录。</string>
+    <string name="history_clear">清空</string>
+    <string name="history_clear_confirm">清空全部历史记录？</string>
+    <string name="open_in_new_window">在新窗口打开</string>
+    <string name="new_window">新窗口</string>
+    <string name="theme_title">深色模式</string>
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+    <string name="theme_desc">切换应用界面的浅色、深色外观。网页自身是否变深取决于网站是否支持深色模式。</string>
+    <string name="force_dark">网页强制深色</string>
+    <string name="force_dark_desc">深色模式下，把不支持深色的网页也自动变暗。可能影响监控大屏等页面的配色，默认关闭。</string>
+    <string name="force_dark_unsupported">系统 WebView 版本过低，不支持网页强制深色</string>
 </resources>

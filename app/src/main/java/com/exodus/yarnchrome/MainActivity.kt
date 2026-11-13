@@ -68,6 +68,11 @@ class MainActivity : AppCompatActivity() {
             result.data?.getStringExtra(BookmarksActivity.EXTRA_URL)?.let { openUrl(it) }
         }
 
+    private val historyLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            result.data?.getStringExtra(HistoryActivity.EXTRA_URL)?.let { openUrl(it) }
+        }
+
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val refreshTick = Runnable { onRefreshTick() }
     private var autoReloading = false
@@ -132,11 +137,22 @@ class MainActivity : AppCompatActivity() {
 
         // 每次启动先显示首页（快捷方式），不自动打开任何网站
         showQuickAccess(true)
+
+        // 重建（切换深色模式等）时恢复原页面；新窗口带着地址启动时直接打开
+        val start = if (savedInstanceState != null) savedInstanceState.getString(STATE_URL)
+        else intent.getStringExtra(EXTRA_URL)
+        if (!start.isNullOrBlank()) openUrl(start)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        currentUrl?.let { outState.putString(STATE_URL, it) }
     }
 
     override fun onResume() {
         super.onResume()
         webView.onResume()
+        PageDark.apply(this, webView)
         if (AppPrefs.isKeepScreenOn(this)) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
@@ -571,7 +587,9 @@ class MainActivity : AppCompatActivity() {
     private fun showMenu(anchor: View) {
         val popup = PopupMenu(this, anchor)
         popup.menu.add(0, 0, 0, R.string.home)
+        popup.menu.add(0, 5, 1, R.string.new_window)
         popup.menu.add(0, 1, 1, R.string.bookmarks)
+        popup.menu.add(0, 6, 1, R.string.history)
         popup.menu.add(0, 3, 2, getString(
             R.string.auto_refresh_menu,
             RefreshInterval.label(this, AppPrefs.refreshIntervalSec(this)),
@@ -583,6 +601,8 @@ class MainActivity : AppCompatActivity() {
         popup.menu.add(0, 2, 4, R.string.settings_title)
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                5 -> openNewWindow(this, null)
+                6 -> historyLauncher.launch(Intent(this, HistoryActivity::class.java))
                 4 -> toggleDiag()
                 3 -> RefreshInterval.show(this) { scheduleAutoRefresh() }
                 0 -> goHome()
@@ -742,6 +762,7 @@ class MainActivity : AppCompatActivity() {
             displayZoomControls = false
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         }
+        PageDark.apply(this, webView)
         webView.setDownloadListener(DownloadListener { _, _, _, _, _ -> })
         // 让系统自动填充服务（密码管理器）可以识别页面里的登录表单
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -783,6 +804,8 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 pageLoading = false
+                // 自动刷新、追帧、恢复造成的重新加载不重复记历史
+                if (!autoReloading) History.record(this@MainActivity, view.title, url)
                 // 页面刚加载完主线程本来就忙，给一段宽限期再开始计慢
                 quietUntil = SystemClock.elapsedRealtime() + POST_LOAD_QUIET_MS
                 autoReloading = false
@@ -826,6 +849,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onReceivedTitle(view: WebView, title: String?) {
+                view.url?.let { History.updateTitle(this@MainActivity, it, title) }
+            }
+
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 progress.progress = newProgress
                 if (newProgress >= 100) progress.visibility = View.GONE
@@ -936,6 +963,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val STATE_URL = "state_url"
+        private const val EXTRA_URL = "url"
+
+        /** 在独立的任务里再开一个浏览器窗口（最近任务里单独一项，平板可分屏/自由窗口并排）。 */
+        fun openNewWindow(context: android.content.Context, url: String?) {
+            val intent = Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+            if (url != null) intent.putExtra(EXTRA_URL, url)
+            context.startActivity(intent)
+        }
+
         private const val WATCHDOG_INTERVAL_MS = 3_000L
         private const val RESUME_PROBE_DELAY_MS = 300L
         private const val SLOW_MS = 1_500L            // 单次探测回调超过它算一次慢

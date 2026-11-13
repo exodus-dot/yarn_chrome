@@ -39,6 +39,23 @@ class SettingsActivity : AppCompatActivity() {
                 AppPrefs.setKeepScreenOn(this@SettingsActivity, checked)
             }
         }
+        val themeButton = findViewById<Button>(R.id.btnTheme)
+        fun updateThemeLabel() {
+            themeButton.text = Theme.label(this, AppPrefs.themeMode(this))
+        }
+        updateThemeLabel()
+        themeButton.setOnClickListener { Theme.show(this) { updateThemeLabel() } }
+        findViewById<SwitchCompat>(R.id.switchForceDark).apply {
+            isChecked = AppPrefs.forceDarkPages(this@SettingsActivity)
+            setOnCheckedChangeListener { _, checked ->
+                if (checked && !PageDark.supported()) {
+                    isChecked = false
+                    Toast.makeText(context, R.string.force_dark_unsupported, Toast.LENGTH_LONG).show()
+                } else {
+                    AppPrefs.setForceDarkPages(this@SettingsActivity, checked)
+                }
+            }
+        }
         setupAutofill()
         val intervalButton = findViewById<Button>(R.id.btnRefreshInterval)
         fun updateIntervalLabel() {

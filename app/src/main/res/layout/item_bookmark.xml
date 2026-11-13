@@ -19,7 +19,7 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="#202124"
+            android:textColor="@color/text"
             android:textSize="16sp" />
 
         <TextView
@@ -28,7 +28,7 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="#80868B"
+            android:textColor="@color/text_hint"
             android:textSize="12sp" />
     </LinearLayout>
 
@@ -39,5 +39,5 @@
         android:background="?attr/selectableItemBackgroundBorderless"
         android:contentDescription="@string/remove"
         android:src="@drawable/ic_close"
-        android:tint="#5F6368" />
+        android:tint="@color/text_sub" />
 </LinearLayout>

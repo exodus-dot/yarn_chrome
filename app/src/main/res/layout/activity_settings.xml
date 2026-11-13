@@ -2,13 +2,13 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#FFFFFF"
+    android:background="@color/bg"
     android:orientation="vertical">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="52dp"
-        android:background="#F1F3F4"
+        android:background="@color/bar"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingStart="4dp"
@@ -21,14 +21,14 @@
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/back"
             android:src="@drawable/ic_back"
-            android:tint="#3C4043" />
+            android:tint="@color/icon" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
             android:text="@string/settings_title"
-            android:textColor="#202124"
+            android:textColor="@color/text"
             android:textSize="18sp"
             android:textStyle="bold" />
     </LinearLayout>
@@ -46,20 +46,42 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switchKeepOn"
+            <TextView
                 android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:text="@string/keep_screen_on"
-                android:textColor="#202124"
+                android:layout_height="wrap_content"
+                android:text="@string/theme_title"
+                android:textColor="@color/text"
                 android:textSize="16sp" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="@string/keep_screen_on_desc"
-                android:textColor="#5F6368"
+                android:text="@string/theme_desc"
+                android:textColor="@color/text_sub"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnTheme"
+                android:layout_width="wrap_content"
+                android:layout_height="44dp"
+                android:layout_marginTop="4dp" />
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchForceDark"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="8dp"
+                android:text="@string/force_dark"
+                android:textColor="@color/text"
+                android:textSize="16sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/force_dark_desc"
+                android:textColor="@color/text_sub"
                 android:textSize="13sp" />
 
             <View
@@ -67,13 +89,36 @@
                 android:layout_height="1dp"
                 android:layout_marginTop="16dp"
                 android:layout_marginBottom="16dp"
-                android:background="#DADCE0" />
+                android:background="@color/divider" />
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchKeepOn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="@string/keep_screen_on"
+                android:textColor="@color/text"
+                android:textSize="16sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/keep_screen_on_desc"
+                android:textColor="@color/text_sub"
+                android:textSize="13sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="16dp"
+                android:background="@color/divider" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/auto_refresh"
-                android:textColor="#202124"
+                android:textColor="@color/text"
                 android:textSize="16sp" />
 
             <TextView
@@ -81,7 +126,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:text="@string/auto_refresh_desc"
-                android:textColor="#5F6368"
+                android:textColor="@color/text_sub"
                 android:textSize="13sp" />
 
             <Button
@@ -95,13 +140,13 @@
                 android:layout_height="1dp"
                 android:layout_marginTop="16dp"
                 android:layout_marginBottom="16dp"
-                android:background="#DADCE0" />
+                android:background="@color/divider" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/latency_title"
-                android:textColor="#202124"
+                android:textColor="@color/text"
                 android:textSize="16sp" />
 
             <TextView
@@ -109,7 +154,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:text="@string/latency_desc"
-                android:textColor="#5F6368"
+                android:textColor="@color/text_sub"
                 android:textSize="13sp" />
 
             <TextView
@@ -117,7 +162,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:text="@string/catch_up"
-                android:textColor="#3C4043"
+                android:textColor="@color/icon"
                 android:textSize="14sp" />
 
             <TextView
@@ -125,7 +170,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:text="@string/catch_up_desc"
-                android:textColor="#5F6368"
+                android:textColor="@color/text_sub"
                 android:textSize="13sp" />
 
             <Button
@@ -139,7 +184,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:text="@string/pixel_ratio"
-                android:textColor="#3C4043"
+                android:textColor="@color/icon"
                 android:textSize="14sp" />
 
             <TextView
@@ -147,7 +192,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:text="@string/pixel_ratio_desc"
-                android:textColor="#5F6368"
+                android:textColor="@color/text_sub"
                 android:textSize="13sp" />
 
             <Button
@@ -161,13 +206,13 @@
                 android:layout_height="1dp"
                 android:layout_marginTop="16dp"
                 android:layout_marginBottom="16dp"
-                android:background="#DADCE0" />
+                android:background="@color/divider" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/autofill_title"
-                android:textColor="#202124"
+                android:textColor="@color/text"
                 android:textSize="16sp" />
 
             <TextView
@@ -176,7 +221,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:text="@string/autofill_desc"
-                android:textColor="#5F6368"
+                android:textColor="@color/text_sub"
                 android:textSize="13sp" />
 
             <TextView
@@ -184,7 +229,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:textColor="#3C4043"
+                android:textColor="@color/icon"
                 android:textSize="13sp" />
 
             <Button
@@ -199,13 +244,13 @@
                 android:layout_height="1dp"
                 android:layout_marginTop="16dp"
                 android:layout_marginBottom="16dp"
-                android:background="#DADCE0" />
+                android:background="@color/divider" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/settings_desc"
-                android:textColor="#5F6368"
+                android:textColor="@color/text_sub"
                 android:textSize="14sp" />
 
             <LinearLayout
@@ -228,8 +273,8 @@
                     android:maxLines="1"
                     android:paddingStart="14dp"
                     android:paddingEnd="14dp"
-                    android:textColor="#202124"
-                    android:textColorHint="#80868B"
+                    android:textColor="@color/text"
+                    android:textColorHint="@color/text_hint"
                     android:textSize="15sp" />
 
                 <Button
@@ -254,7 +299,7 @@
                 android:layout_marginTop="24dp"
                 android:gravity="center"
                 android:text="@string/empty_whitelist"
-                android:textColor="#80868B"
+                android:textColor="@color/text_hint"
                 android:textSize="14sp"
                 android:visibility="gone" />
         </LinearLayout>

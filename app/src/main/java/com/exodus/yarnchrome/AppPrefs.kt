@@ -9,6 +9,8 @@ object AppPrefs {
     private const val KEY_REFRESH_INTERVAL = "refresh_interval_sec"
     private const val KEY_CATCH_UP = "catch_up_sec"
     private const val KEY_PIXEL_RATIO_CAP = "pixel_ratio_cap"
+    private const val KEY_THEME = "theme_mode"
+    private const val KEY_FORCE_DARK = "force_dark_pages"
 
     fun isKeepScreenOn(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -48,6 +50,24 @@ object AppPrefs {
             .edit()
             .putFloat(KEY_PIXEL_RATIO_CAP, value)
             .apply()
+    }
+
+    /** 界面主题：0 跟随系统，1 浅色，2 深色。 */
+    fun themeMode(context: Context): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_THEME, 0)
+
+    fun setThemeMode(context: Context, mode: Int) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putInt(KEY_THEME, mode).apply()
+    }
+
+    /** 深色界面下，是否对不支持深色的网页强制变暗。 */
+    fun forceDarkPages(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_FORCE_DARK, false)
+
+    fun setForceDarkPages(context: Context, value: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_FORCE_DARK, value).apply()
     }
 
     fun setKeepScreenOn(context: Context, value: Boolean) {

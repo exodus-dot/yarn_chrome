@@ -14,7 +14,7 @@
         android:layout_height="48dp"
         android:background="@drawable/bg_tile"
         android:gravity="center"
-        android:textColor="#1A73E8"
+        android:textColor="@color/accent"
         android:textSize="20sp"
         android:textStyle="bold" />
 
@@ -28,6 +28,6 @@
         android:ellipsize="end"
         android:gravity="center"
         android:maxLines="1"
-        android:textColor="#3C4043"
+        android:textColor="@color/icon"
         android:textSize="12sp" />
 </LinearLayout>
