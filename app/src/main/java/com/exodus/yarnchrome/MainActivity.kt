@@ -73,6 +73,36 @@ class MainActivity : AppCompatActivity() {
             result.data?.getStringExtra(HistoryActivity.EXTRA_URL)?.let { openUrl(it) }
         }
 
+    // ---- 日语字幕翻译 ----
+    private lateinit var captionView: TextView
+    private var captionOnDevice = true
+    private val captionListener = object : CaptionBus.Listener {
+        override fun onCaption(original: String, translated: String) = showCaption(original, translated)
+        override fun onCaptionState(running: Boolean) {
+            if (!running) captionView.visibility = View.GONE
+        }
+    }
+    private val micPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) checkSpeechModel()
+            else Toast.makeText(this, R.string.caption_permission_denied, Toast.LENGTH_LONG).show()
+        }
+    private val projectionLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val data = result.data
+            if (result.resultCode != RESULT_OK || data == null || Build.VERSION.SDK_INT < 33) {
+                Toast.makeText(this, R.string.caption_cancelled, Toast.LENGTH_SHORT).show()
+                return@registerForActivityResult
+            }
+            startForegroundService(
+                Intent(this, CaptionService::class.java)
+                    .putExtra(CaptionService.EXTRA_CODE, result.resultCode)
+                    .putExtra(CaptionService.EXTRA_DATA, data)
+                    .putExtra(CaptionService.EXTRA_ON_DEVICE, captionOnDevice),
+            )
+            Toast.makeText(this, R.string.caption_on, Toast.LENGTH_LONG).show()
+        }
+
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val refreshTick = Runnable { onRefreshTick() }
     private var autoReloading = false
@@ -130,6 +160,7 @@ class MainActivity : AppCompatActivity() {
         homeInput = findViewById(R.id.homeInput)
 
         setupDiagOverlay()
+        setupCaptionView()
         setupWebView()
         applyPageScripts(reload = false)
         setupButtons()
@@ -186,6 +217,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        CaptionBus.remove(captionListener)
         refreshHandler.removeCallbacks(refreshTick)
         stopWatchdog()
         stats?.close()
@@ -330,6 +362,144 @@ class MainActivity : AppCompatActivity() {
             showQuickAccess(true)
         }
         if (resumed) scheduleWatchdog(WATCHDOG_INTERVAL_MS)
+    }
+
+    // ---- 日语字幕翻译 ----
+
+    private fun setupCaptionView() {
+        val density = resources.displayMetrics.density
+        captionView = TextView(this).apply {
+            setBackgroundColor(0xB3000000.toInt())
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 20f
+            gravity = Gravity.CENTER
+            val padH = (12 * density).toInt()
+            val padV = (6 * density).toInt()
+            setPadding(padH, padV, padH, padV)
+            visibility = View.GONE
+            isClickable = false
+            isFocusable = false
+        }
+        val margin = (16 * density).toInt()
+        contentFrame.addView(
+            captionView,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+            ).apply { setMargins(margin, margin, margin, (64 * density).toInt()) },
+        )
+        CaptionBus.add(captionListener)
+    }
+
+    /** 中文一行在上，日文原文小字在下。 */
+    private fun showCaption(original: String, translated: String) {
+        if (original.isEmpty() && translated.isEmpty()) {
+            captionView.visibility = View.GONE
+            return
+        }
+        val text = android.text.SpannableStringBuilder()
+        if (translated.isNotEmpty()) text.append(translated)
+        if (original.isNotEmpty()) {
+            if (text.isNotEmpty()) text.append('\n')
+            val start = text.length
+            text.append(original)
+            text.setSpan(
+                android.text.style.RelativeSizeSpan(0.7f), start, text.length,
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+            text.setSpan(
+                android.text.style.ForegroundColorSpan(0xFFDADCE0.toInt()), start, text.length,
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+        }
+        captionView.text = text
+        captionView.visibility = View.VISIBLE
+        captionView.bringToFront()   // 视频全屏、弹窗叠加层之上也要能看到
+    }
+
+    private fun toggleCaptions() {
+        if (CaptionBus.running) {
+            CaptionService.stop(this)
+            return
+        }
+        if (Build.VERSION.SDK_INT < 33) {
+            Toast.makeText(this, R.string.caption_unsupported_os, Toast.LENGTH_LONG).show()
+            return
+        }
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        checkSpeechModel()
+    }
+
+    /** 优先用离线日语识别：没装模型就触发下载；设备完全不支持离线识别时退回在线识别。 */
+    private fun checkSpeechModel() {
+        if (Build.VERSION.SDK_INT < 33) return
+        if (!android.speech.SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+            if (!android.speech.SpeechRecognizer.isRecognitionAvailable(this)) {
+                Toast.makeText(this, R.string.caption_language_unavailable, Toast.LENGTH_LONG).show()
+                return
+            }
+            Toast.makeText(this, R.string.caption_cloud_fallback, Toast.LENGTH_SHORT).show()
+            requestProjection(onDevice = false)
+            return
+        }
+        val probe = android.speech.SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+        val intent = CaptionService.recognizerIntent()
+        probe.checkRecognitionSupport(
+            intent,
+            mainExecutor,
+            object : android.speech.RecognitionSupportCallback {
+                override fun onSupportResult(support: android.speech.RecognitionSupport) {
+                    fun hasJa(list: List<String>) = list.any { it.startsWith("ja", ignoreCase = true) }
+                    when {
+                        hasJa(support.installedOnDeviceLanguages) -> {
+                            probe.destroy()
+                            requestProjection(onDevice = true)
+                        }
+                        hasJa(support.pendingOnDeviceLanguages) -> {
+                            probe.destroy()
+                            Toast.makeText(this@MainActivity, R.string.caption_model_downloading, Toast.LENGTH_LONG).show()
+                        }
+                        hasJa(support.supportedOnDeviceLanguages) -> {
+                            probe.triggerModelDownload(intent)
+                            refreshHandler.postDelayed({ probe.destroy() }, 3_000)
+                            Toast.makeText(this@MainActivity, R.string.caption_model_downloading, Toast.LENGTH_LONG).show()
+                        }
+                        else -> {
+                            probe.destroy()
+                            Toast.makeText(this@MainActivity, R.string.caption_cloud_fallback, Toast.LENGTH_SHORT).show()
+                            requestProjection(onDevice = false)
+                        }
+                    }
+                }
+
+                override fun onError(error: Int) {
+                    probe.destroy()
+                    // 查询失败不代表不能用，直接按离线识别试，出错时服务会提示
+                    requestProjection(onDevice = true)
+                }
+            },
+        )
+    }
+
+    private fun requestProjection(onDevice: Boolean) {
+        captionOnDevice = onDevice
+        val manager = getSystemService(android.media.projection.MediaProjectionManager::class.java)
+        val intent = if (Build.VERSION.SDK_INT >= 34) {
+            // 直接共享整个屏幕，跳过“选择单个应用”，才能抓到播放的声音
+            manager.createScreenCaptureIntent(
+                android.media.projection.MediaProjectionConfig.createConfigForDefaultDisplay(),
+            )
+        } else {
+            manager.createScreenCaptureIntent()
+        }
+        Toast.makeText(this, R.string.caption_projection_hint, Toast.LENGTH_LONG).show()
+        projectionLauncher.launch(intent)
     }
 
     // ---- 诊断模式与按延迟追帧 ----
@@ -594,6 +764,10 @@ class MainActivity : AppCompatActivity() {
             R.string.auto_refresh_menu,
             RefreshInterval.label(this, AppPrefs.refreshIntervalSec(this)),
         ))
+        popup.menu.add(0, 7, 3, R.string.caption_title).apply {
+            isCheckable = true
+            isChecked = CaptionBus.running
+        }
         popup.menu.add(0, 4, 3, R.string.diag_mode).apply {
             isCheckable = true
             isChecked = diagOn
@@ -603,6 +777,7 @@ class MainActivity : AppCompatActivity() {
             when (item.itemId) {
                 5 -> openNewWindow(this, null)
                 6 -> historyLauncher.launch(Intent(this, HistoryActivity::class.java))
+                7 -> toggleCaptions()
                 4 -> toggleDiag()
                 3 -> RefreshInterval.show(this) { scheduleAutoRefresh() }
                 0 -> goHome()

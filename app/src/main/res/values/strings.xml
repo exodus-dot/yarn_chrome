@@ -77,4 +77,18 @@
     <string name="force_dark">网页强制深色</string>
     <string name="force_dark_desc">深色模式下，把不支持深色的网页也自动变暗。可能影响监控大屏等页面的配色，默认关闭。</string>
     <string name="force_dark_unsupported">系统 WebView 版本过低，不支持网页强制深色</string>
+    <string name="caption_title">日语字幕翻译</string>
+    <string name="caption_notification_text">正在识别浏览器播放的日语并翻译成中文</string>
+    <string name="caption_stop">停止</string>
+    <string name="caption_unsupported_os">实时字幕需要 Android 13 或更高版本</string>
+    <string name="caption_permission_denied">需要录音权限才能识别播放的声音（只抓取本机播放的声音，不使用麦克风）</string>
+    <string name="caption_projection_hint">接下来系统会询问是否共享屏幕，请选择共享整个屏幕。只用于抓取播放的声音，不录制画面。</string>
+    <string name="caption_cancelled">已取消开启字幕</string>
+    <string name="caption_start_failed">字幕开启失败，无法抓取播放的声音</string>
+    <string name="caption_model_downloading">正在下载日语离线识别模型，下载完成后再开启字幕</string>
+    <string name="caption_cloud_fallback">此设备没有日语离线识别，改用在线识别</string>
+    <string name="caption_language_unavailable">语音识别不支持日语，请在系统设置里安装日语语音识别</string>
+    <string name="caption_recognizer_error">语音识别连续出错（代码 %1$d），字幕已停止</string>
+    <string name="caption_translate_model_failed">中文翻译模型下载失败，暂时只显示日文</string>
+    <string name="caption_on">字幕已开启，首次使用会下载约 30 MB 的翻译模型</string>
 </resources>
